@@ -1,22 +1,28 @@
 import { useState, useEffect } from 'react'
-import { Upload, X, Copy, Loader2, Save, RotateCcw, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Trash2, History } from 'lucide-react'
+import { Upload, X, Copy, Loader2, Save, RotateCcw, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Trash2, History, FileText, Plus, GripVertical, Tag, Folder } from 'lucide-react'
 import { Button } from './components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './components/ui/card'
 import { Textarea } from './components/ui/textarea'
 import { cn } from './lib/utils'
+import { PROMPT_TEMPLATES, DEFAULT_PROMPT } from './promptTemplates'
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core'
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+  rectSortingStrategy,
+} from '@dnd-kit/sortable'
+import { SortableImage } from './components/SortableImage'
 import './App.css'
 
-const DEFAULT_PROMPT = `Analyze these UI screenshots in sequence. For each screenshot, provide:
-1. A brief, objective description of what's shown (UI elements, layout, content)
-2. The apparent purpose or function of this screen
-3. Any notable UI/UX patterns or components used
-
-After analyzing individual screens, provide an overall flow analysis that describes:
-- The user journey or workflow represented
-- How the screens connect or relate to each other
-- The overall purpose of this application or feature set
-
-Be descriptive and objective, focusing on what is visible rather than making subjective judgments about quality.`
 
 function App() {
   const [images, setImages] = useState([])
@@ -35,6 +41,23 @@ function App() {
   })
   const [currentHistoryIndex, setCurrentHistoryIndex] = useState(-1)
   const [viewingHistory, setViewingHistory] = useState(false)
+  const [savedPrompts, setSavedPrompts] = useState(() => {
+    const saved = localStorage.getItem('savedPrompts')
+    return saved ? JSON.parse(saved) : []
+  })
+  const [showPromptLibrary, setShowPromptLibrary] = useState(false)
+  const [currentProject, setCurrentProject] = useState('')
+  const [currentTags, setCurrentTags] = useState([])
+  const [searchQuery, setSearchQuery] = useState('')
+  const [filterProject, setFilterProject] = useState('')
+  const [showFilters, setShowFilters] = useState(false)
+  
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  )
 
   useEffect(() => {
     // Load saved API key on mount
@@ -52,6 +75,11 @@ function App() {
     // Save history to localStorage whenever it changes
     localStorage.setItem('analyzerHistory', JSON.stringify(history))
   }, [history])
+
+  useEffect(() => {
+    // Save custom prompts
+    localStorage.setItem('savedPrompts', JSON.stringify(savedPrompts))
+  }, [savedPrompts])
 
   const handleDrag = (e) => {
     e.preventDefault()
@@ -105,6 +133,18 @@ function App() {
     setImages(prev => prev.filter(img => img.id !== id))
   }
 
+  const handleDragEnd = (event) => {
+    const { active, over } = event
+
+    if (active.id !== over.id) {
+      setImages((items) => {
+        const oldIndex = items.findIndex((item) => item.id === active.id)
+        const newIndex = items.findIndex((item) => item.id === over.id)
+        return arrayMove(items, oldIndex, newIndex)
+      })
+    }
+  }
+
   const analyzeScreenshots = async () => {
     if (!apiKey || images.length === 0) return
     
@@ -146,7 +186,9 @@ function App() {
             dataUrl: img.dataUrl
           })),
           prompt: prompt,
-          analysis: data.analysis
+          analysis: data.analysis,
+          project: currentProject,
+          tags: currentTags
         }
         
         setHistory(prev => [submission, ...prev].slice(0, 50)) // Keep last 50 submissions
@@ -214,6 +256,8 @@ function App() {
       })))
       setPrompt(submission.prompt)
       setResults({ analysis: submission.analysis })
+      setCurrentProject(submission.project || '')
+      setCurrentTags(submission.tags || [])
       setCurrentHistoryIndex(index)
       setViewingHistory(true)
     }
@@ -246,6 +290,69 @@ function App() {
     }
   }
 
+  const saveCurrentPrompt = () => {
+    const name = window.prompt('Enter a name for this prompt:')
+    if (name) {
+      const newPrompt = {
+        id: Date.now(),
+        name,
+        prompt: prompt,
+        createdAt: new Date().toISOString()
+      }
+      setSavedPrompts(prev => [...prev, newPrompt])
+      setSaveStatus('Prompt saved to library!')
+      setTimeout(() => setSaveStatus(''), 2000)
+    }
+  }
+
+  const loadPromptTemplate = (template) => {
+    setPrompt(template.prompt)
+    setShowPromptLibrary(false)
+    setSaveStatus(`Loaded "${template.name}" template`)
+    setTimeout(() => setSaveStatus(''), 2000)
+  }
+
+  const deleteCustomPrompt = (id) => {
+    setSavedPrompts(prev => prev.filter(p => p.id !== id))
+  }
+
+  const addTag = (tag) => {
+    if (tag && !currentTags.includes(tag)) {
+      setCurrentTags(prev => [...prev, tag])
+    }
+  }
+
+  const removeTag = (tag) => {
+    setCurrentTags(prev => prev.filter(t => t !== tag))
+  }
+
+  const getAllProjects = () => {
+    const projects = new Set()
+    history.forEach(item => {
+      if (item.project) projects.add(item.project)
+    })
+    return Array.from(projects)
+  }
+
+  const getAllTags = () => {
+    const tags = new Set()
+    history.forEach(item => {
+      if (item.tags) item.tags.forEach(tag => tags.add(tag))
+    })
+    return Array.from(tags)
+  }
+
+  const filteredHistory = history.filter(item => {
+    const matchesSearch = !searchQuery || 
+      item.analysis?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      item.project?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      item.tags?.some(tag => tag.toLowerCase().includes(searchQuery.toLowerCase()))
+    
+    const matchesProject = !filterProject || item.project === filterProject
+    
+    return matchesSearch && matchesProject
+  })
+
   return (
     <div className="min-h-screen bg-gray-50 p-8">
       <div className="max-w-6xl mx-auto">
@@ -258,6 +365,74 @@ function App() {
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-2">
+                    Project
+                  </label>
+                  <input
+                    type="text"
+                    value={currentProject}
+                    onChange={(e) => setCurrentProject(e.target.value)}
+                    placeholder="Enter project name"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    disabled={viewingHistory}
+                  />
+                  {getAllProjects().length > 0 && (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {getAllProjects().map(project => (
+                        <button
+                          key={project}
+                          onClick={() => setCurrentProject(project)}
+                          className="text-xs px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded"
+                        >
+                          {project}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium mb-2">
+                    Tags
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder="Add tags..."
+                      className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      disabled={viewingHistory}
+                      onKeyPress={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          addTag(e.target.value)
+                          e.target.value = ''
+                        }
+                      }}
+                    />
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {currentTags.map(tag => (
+                      <span
+                        key={tag}
+                        className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs"
+                      >
+                        {tag}
+                        {!viewingHistory && (
+                          <button
+                            onClick={() => removeTag(tag)}
+                            className="hover:text-blue-900"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        )}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              
               <div>
                 <label className="block text-sm font-medium mb-2">
                   Claude API Key
@@ -286,18 +461,78 @@ function App() {
                   <label className="block text-sm font-medium">
                     Analysis Prompt
                   </label>
-                  <Button
-                    onClick={() => setShowPrompt(!showPrompt)}
-                    variant="ghost"
-                    size="sm"
-                  >
-                    {showPrompt ? (
-                      <><ChevronUp className="h-4 w-4 mr-1" /> Hide</>
-                    ) : (
-                      <><ChevronDown className="h-4 w-4 mr-1" /> Show</>
-                    )}
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button
+                      onClick={() => setShowPromptLibrary(!showPromptLibrary)}
+                      variant="ghost"
+                      size="sm"
+                    >
+                      <FileText className="h-4 w-4 mr-1" />
+                      Library
+                    </Button>
+                    <Button
+                      onClick={() => setShowPrompt(!showPrompt)}
+                      variant="ghost"
+                      size="sm"
+                    >
+                      {showPrompt ? (
+                        <><ChevronUp className="h-4 w-4 mr-1" /> Hide</>
+                      ) : (
+                        <><ChevronDown className="h-4 w-4 mr-1" /> Show</>
+                      )}
+                    </Button>
+                  </div>
                 </div>
+                
+                {showPromptLibrary && (
+                  <div className="space-y-2 p-4 bg-gray-50 rounded-lg">
+                    <h4 className="font-medium text-sm mb-2">Prompt Templates</h4>
+                    <div className="space-y-2 max-h-64 overflow-y-auto">
+                      {PROMPT_TEMPLATES.map(template => (
+                        <div
+                          key={template.id}
+                          className="p-3 border rounded-lg hover:bg-white cursor-pointer transition-colors"
+                          onClick={() => loadPromptTemplate(template)}
+                        >
+                          <div className="font-medium text-sm">{template.name}</div>
+                          <div className="text-xs text-gray-500">{template.description}</div>
+                        </div>
+                      ))}
+                      
+                      {savedPrompts.length > 0 && (
+                        <>
+                          <div className="text-xs text-gray-500 font-medium mt-4 mb-2">Custom Prompts</div>
+                          {savedPrompts.map(customPrompt => (
+                            <div
+                              key={customPrompt.id}
+                              className="p-3 border rounded-lg hover:bg-white cursor-pointer transition-colors flex justify-between items-start"
+                            >
+                              <div
+                                className="flex-1"
+                                onClick={() => loadPromptTemplate(customPrompt)}
+                              >
+                                <div className="font-medium text-sm">{customPrompt.name}</div>
+                                <div className="text-xs text-gray-500">
+                                  Created {new Date(customPrompt.createdAt).toLocaleDateString()}
+                                </div>
+                              </div>
+                              <Button
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  deleteCustomPrompt(customPrompt.id)
+                                }}
+                                variant="ghost"
+                                size="sm"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          ))}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
                 
                 {showPrompt && (
                   <div className="space-y-2">
@@ -314,7 +549,15 @@ function App() {
                         size="sm"
                       >
                         <Save className="h-4 w-4 mr-2" />
-                        Save Prompt
+                        Save Changes
+                      </Button>
+                      <Button
+                        onClick={saveCurrentPrompt}
+                        variant="outline"
+                        size="sm"
+                      >
+                        <Plus className="h-4 w-4 mr-2" />
+                        Save to Library
                       </Button>
                       <Button
                         onClick={resetPrompt}
@@ -367,30 +610,34 @@ function App() {
               </div>
 
               {images.length > 0 && (
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 mt-6">
-                  {images.map((image) => (
-                    <div key={image.id} className="relative group">
-                      <img
-                        src={image.dataUrl}
-                        alt={image.name}
-                        className="w-full h-32 object-cover rounded-lg"
-                      />
-                      {!viewingHistory && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            removeImage(image.id)
-                          }}
-                          className="absolute top-2 right-2 p-1 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
-                        >
-                          <X className="h-4 w-4" />
-                        </button>
-                      )}
-                      <p className="mt-1 text-xs text-gray-600 truncate">
-                        {image.name}
-                      </p>
-                    </div>
-                  ))}
+                <div className="mt-6">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-sm text-gray-600">
+                      {images.length} screenshot{images.length !== 1 ? 's' : ''} • Drag to reorder
+                    </p>
+                  </div>
+                  <DndContext
+                    sensors={sensors}
+                    collisionDetection={closestCenter}
+                    onDragEnd={handleDragEnd}
+                  >
+                    <SortableContext
+                      items={images.map(img => img.id)}
+                      strategy={rectSortingStrategy}
+                    >
+                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                        {images.map((image, index) => (
+                          <SortableImage
+                            key={image.id}
+                            image={image}
+                            index={index}
+                            onRemove={removeImage}
+                            disabled={viewingHistory}
+                          />
+                        ))}
+                      </div>
+                    </SortableContext>
+                  </DndContext>
                 </div>
               )}
 
@@ -402,6 +649,8 @@ function App() {
                       setCurrentHistoryIndex(-1)
                       setImages([])
                       setResults(null)
+                      setCurrentProject('')
+                      setCurrentTags([])
                     }}
                     variant="outline"
                     className="flex-1"
@@ -434,19 +683,55 @@ function App() {
               <div className="flex justify-between items-center">
                 <CardTitle className="flex items-center gap-2">
                   <History className="h-5 w-5" />
-                  History ({history.length})
+                  History ({filteredHistory.length} of {history.length})
                 </CardTitle>
-                <Button
-                  onClick={clearHistory}
-                  variant="outline"
-                  size="sm"
-                >
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  Clear All
-                </Button>
+                <div className="flex gap-2">
+                  <Button
+                    onClick={() => setShowFilters(!showFilters)}
+                    variant="outline"
+                    size="sm"
+                  >
+                    {showFilters ? 'Hide' : 'Show'} Filters
+                  </Button>
+                  <Button
+                    onClick={clearHistory}
+                    variant="outline"
+                    size="sm"
+                  >
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Clear All
+                  </Button>
+                </div>
               </div>
             </CardHeader>
             <CardContent>
+              {showFilters && (
+                <div className="mb-4 space-y-3 p-4 bg-gray-50 rounded-lg">
+                  <div>
+                    <input
+                      type="text"
+                      placeholder="Search analyses..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  
+                  <div className="flex gap-2 items-center">
+                    <label className="text-sm font-medium">Project:</label>
+                    <select
+                      value={filterProject}
+                      onChange={(e) => setFilterProject(e.target.value)}
+                      className="flex-1 px-3 py-1 border border-gray-300 rounded-md text-sm"
+                    >
+                      <option value="">All Projects</option>
+                      {getAllProjects().map(project => (
+                        <option key={project} value={project}>{project}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
               {viewingHistory && currentHistoryIndex >= 0 && (
                 <div className="mb-4 p-3 bg-blue-50 rounded-lg flex items-center justify-between">
                   <span className="text-sm text-blue-700">
@@ -477,35 +762,56 @@ function App() {
               )}
               
               <div className="space-y-2 max-h-64 overflow-y-auto">
-                {history.map((item, index) => (
-                  <div
-                    key={item.id}
-                    className={cn(
-                      "flex items-center justify-between p-3 rounded-lg border cursor-pointer hover:bg-gray-50 transition-colors",
-                      viewingHistory && currentHistoryIndex === index && "border-blue-500 bg-blue-50"
-                    )}
-                    onClick={() => loadFromHistory(index)}
-                  >
-                    <div className="flex-1">
-                      <div className="font-medium text-sm">
-                        {item.images.length} screenshot{item.images.length !== 1 ? 's' : ''}
-                      </div>
-                      <div className="text-xs text-gray-500">
-                        {new Date(item.timestamp).toLocaleString()}
-                      </div>
-                    </div>
-                    <Button
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        deleteFromHistory(item.id)
-                      }}
-                      variant="ghost"
-                      size="sm"
+                {filteredHistory.map((item, index) => {
+                  const actualIndex = history.findIndex(h => h.id === item.id)
+                  return (
+                    <div
+                      key={item.id}
+                      className={cn(
+                        "flex items-center justify-between p-3 rounded-lg border cursor-pointer hover:bg-gray-50 transition-colors",
+                        viewingHistory && currentHistoryIndex === actualIndex && "border-blue-500 bg-blue-50"
+                      )}
+                      onClick={() => loadFromHistory(actualIndex)}
                     >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                ))}
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-1">
+                          <div className="font-medium text-sm">
+                            {item.images.length} screenshot{item.images.length !== 1 ? 's' : ''}
+                          </div>
+                          {item.project && (
+                            <span className="text-xs px-2 py-0.5 bg-purple-100 text-purple-700 rounded">
+                              <Folder className="inline h-3 w-3 mr-1" />
+                              {item.project}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          {new Date(item.timestamp).toLocaleString()}
+                        </div>
+                        {item.tags && item.tags.length > 0 && (
+                          <div className="flex gap-1 mt-1">
+                            {item.tags.map(tag => (
+                              <span key={tag} className="text-xs px-1.5 py-0.5 bg-gray-100 text-gray-600 rounded">
+                                <Tag className="inline h-3 w-3 mr-0.5" />
+                                {tag}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <Button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          deleteFromHistory(item.id)
+                        }}
+                        variant="ghost"
+                        size="sm"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  )
+                })}
               </div>
             </CardContent>
           </Card>
